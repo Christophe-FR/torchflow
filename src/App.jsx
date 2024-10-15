@@ -12,7 +12,7 @@ import {
 } from '@xyflow/react';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
-import { FaBars, FaPlay, FaSearch } from 'react-icons/fa'; // Importing icons from react-icons
+import { FaBars, FaPlay, FaSearch } from 'react-icons/fa';
 
 import '@xyflow/react/dist/style.css';
 
@@ -105,13 +105,16 @@ const Sidebar = ({ availableNodes }) => {
 };
 
 function App() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes] = useNodesState(initialNodes);
+  const [edges, setEdges] = useEdgesState(initialEdges);
   const [response, setResponse] = useState(null);
-  const [socket, setSocket] = useState(null);
+  const socketRef = useRef(null); // Use useRef to hold the WebSocket
   const [copiedNodes, setCopiedNodes] = useState([]);
-  const [availableNodes, setAvailableNodes] = useState([]); // Initialize as empty array
+  const [availableNodes, setAvailableNodes] = useState([]);
   const reactFlowWrapper = useRef(null);
+  const [clientId, setClientId] = useState(null);
+  const [connectedClients, setConnectedClients] = useState([]);
+  const clientColors = useRef({});
 
   // Fetch available nodes from the backend
   useEffect(() => {
@@ -141,88 +144,114 @@ function App() {
       })
       .catch((error) => {
         console.error('Error fetching registered nodes:', error);
-        setAvailableNodes([]); // Ensure availableNodes is always an array
+        setAvailableNodes([]);
       });
   }, []);
 
   // Initialize WebSocket connection
   useEffect(() => {
-    const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+    if (socketRef.current) return; // Prevent multiple connections
 
-    ws.onopen = () => {
+    socketRef.current = new WebSocket('ws://127.0.0.1:8000/ws');
+
+    socketRef.current.onopen = () => {
       console.log('WebSocket connection established');
-      setSocket(ws);
     };
 
-    ws.onerror = (error) => {
+    socketRef.current.onerror = (error) => {
       console.error('WebSocket error:', error);
     };
 
-    ws.onclose = () => {
+    socketRef.current.onclose = () => {
       console.warn('WebSocket connection closed');
-      setSocket(null);
     };
 
-    ws.onmessage = (event) => {
-      const updatedFlow = JSON.parse(event.data);
-      if (updatedFlow.nodes && updatedFlow.edges) {
-        setNodes((prevNodes) => {
-          const nodesMap = new Map(prevNodes.map((node) => [node.id, node]));
-          updatedFlow.nodes.forEach((node) => {
-            nodesMap.set(node.id, {
-              ...nodesMap.get(node.id),
-              ...node,
-              data: {
-                ...nodesMap.get(node.id)?.data,
-                ...node.data,
-              },
-            });
-          });
-          return Array.from(nodesMap.values());
-        });
+    socketRef.current.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
 
-        setEdges((prevEdges) => {
-          const edgesMap = new Map(prevEdges.map((edge) => [edge.id, edge]));
-          updatedFlow.edges.forEach((edge) => {
-            edgesMap.set(edge.id, {
-              ...edgesMap.get(edge.id),
-              ...edge,
-            });
+        if (message.type === 'client_id') {
+          setClientId(message.client_id);
+        } else if (message.type === 'client_list') {
+          const uniqueClients = Array.from(new Set(message.clients));
+          setConnectedClients(uniqueClients);
+
+          // Assign colors to new clients
+          uniqueClients.forEach((id) => {
+            if (!clientColors.current[id]) {
+              // Assign a random color
+              clientColors.current[id] = '#' + Math.floor(Math.random() * 16777215).toString(16);
+            }
           });
-          return Array.from(edgesMap.values());
-        });
+        } else if (message.type === 'flow_update') {
+          const updatedFlow = message.data;
+          if (updatedFlow.nodes && updatedFlow.edges) {
+            setNodes((prevNodes) => {
+              const nodesMap = new Map(prevNodes.map((node) => [node.id, node]));
+              updatedFlow.nodes.forEach((node) => {
+                nodesMap.set(node.id, {
+                  ...nodesMap.get(node.id),
+                  ...node,
+                  data: {
+                    ...nodesMap.get(node.id)?.data,
+                    ...node.data,
+                  },
+                });
+              });
+              return Array.from(nodesMap.values());
+            });
+
+            setEdges((prevEdges) => {
+              const edgesMap = new Map(prevEdges.map((edge) => [edge.id, edge]));
+              updatedFlow.edges.forEach((edge) => {
+                edgesMap.set(edge.id, {
+                  ...edgesMap.get(edge.id),
+                  ...edge,
+                });
+              });
+              return Array.from(edgesMap.values());
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
       }
     };
 
     return () => {
-      ws.close();
+      if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        socketRef.current.close();
+      }
     };
   }, []);
 
   const sendFlowToServer = (updatedNodes, updatedEdges) => {
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       console.warn('WebSocket is not open. Cannot send flow data to server.');
       return;
     }
 
     const flowData = {
-      nodes: updatedNodes.map((node) => ({
-        id: node.id,
-        label: node.data.label,
-        type: node.type || 'default',
-        position: node.position,
-        data: node.data,
-      })),
-      edges: updatedEdges.map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        sourceHandle: edge.sourceHandle,
-        targetHandle: edge.targetHandle,
-      })),
+      type: 'flow_update',
+      data: {
+        nodes: updatedNodes.map((node) => ({
+          id: node.id,
+          label: node.data.label,
+          type: node.type || 'default',
+          position: node.position,
+          data: node.data,
+        })),
+        edges: updatedEdges.map((edge) => ({
+          id: edge.id,
+          source: edge.source,
+          target: edge.target,
+          sourceHandle: edge.sourceHandle,
+          targetHandle: edge.targetHandle,
+        })),
+      },
     };
 
-    socket.send(JSON.stringify(flowData));
+    socketRef.current.send(JSON.stringify(flowData));
   };
 
   const onConnect = useCallback(
@@ -231,7 +260,7 @@ function App() {
       setEdges(updatedEdges);
       sendFlowToServer(nodes, updatedEdges);
     },
-    [nodes, edges, socket]
+    [nodes, edges]
   );
 
   const onNodeDoubleClick = useCallback(
@@ -245,7 +274,7 @@ function App() {
         sendFlowToServer(updatedNodes, edges);
       }
     },
-    [nodes, edges, socket]
+    [nodes, edges]
   );
 
   const sendDataToBackend = () => {
@@ -286,7 +315,7 @@ function App() {
           const newNodes = copiedNodes.map((node) => ({
             ...node,
             id: uuidv4(),
-            position: { x: node.position.x + 20, y: node.position.y + 20 }, // Offset copied node
+            position: { x: node.position.x + 20, y: node.position.y + 20 },
             selected: false,
           }));
           const updatedNodes = nodes.concat(newNodes);
@@ -295,7 +324,7 @@ function App() {
         }
       }
     },
-    [nodes, edges, copiedNodes, socket]
+    [nodes, edges, copiedNodes]
   );
 
   useEffect(() => {
@@ -327,7 +356,7 @@ function App() {
         x: event.clientX - reactFlowBounds.left,
         y: event.clientY - reactFlowBounds.top,
       };
-      
+
       const newNode = {
         id: uuidv4(),
         type: 'custom',
@@ -345,7 +374,7 @@ function App() {
       setNodes(updatedNodes);
       sendFlowToServer(updatedNodes, edges);
     },
-    [nodes, edges, socket]
+    [nodes, edges]
   );
 
   return (
@@ -356,7 +385,7 @@ function App() {
           display: 'flex',
           alignItems: 'center',
           padding: '10px',
-          background: '#282c34',
+          background: 'linear-gradient(to left, #d4d3d3, #ee5d5b)',
           color: 'white',
           height: '50px',
         }}
@@ -399,8 +428,30 @@ function App() {
         >
           <FaSearch />
         </button>
+        {/* Display connected clients as overlapping circles */}
+        <div
+          style={{
+            display: 'flex',
+            marginLeft: 'auto',
+            marginRight: '20px',
+          }}
+        >
+          {connectedClients.map((id, index) => (
+            <div
+              key={id}
+              style={{
+                width: '30px',
+                height: '30px',
+                borderRadius: '50%',
+                backgroundColor: clientColors.current[id] || '#61dafb',
+                border: id === clientId ? '2px solid #fff' : 'none',
+                marginLeft: index === 0 ? 0 : -10,
+              }}
+            ></div>
+          ))}
+        </div>
       </div>
-      
+
       {/* Main Content */}
       <div style={{ display: 'flex', flex: 1 }}>
         <Sidebar availableNodes={availableNodes} />
