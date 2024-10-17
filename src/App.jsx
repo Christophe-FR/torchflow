@@ -1,14 +1,16 @@
 // App.jsx
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, memo } from 'react';
 import {
   ReactFlow,
   addEdge,
   Background,
   Handle,
+  Position,
   useNodesState,
   useEdgesState,
   applyNodeChanges,
   applyEdgeChanges,
+  NodeResizer,
 } from '@xyflow/react';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
@@ -16,8 +18,8 @@ import { FaBars, FaPlay, FaSearch } from 'react-icons/fa';
 
 import '@xyflow/react/dist/style.css';
 
-// Define the CustomNode component
-function CustomNode({ data }) {
+// Define the CustomNode component with resizable and bordered functionality
+const CustomNode = memo(({ data, selected }) => {
   const { label, in: inputs, out: outputs } = data;
 
   // Configuration for port spacing
@@ -37,66 +39,110 @@ function CustomNode({ data }) {
   };
 
   return (
-    <div
-      style={{
-        padding: 10,
-        border: '1px solid #ddd',
-        borderRadius: 5,
-        background: '#fff',
-        position: 'relative',
-        width: '150px', // Optional: Set a fixed width for consistency
-        height: `${nodeHeight}px`, // Dynamic height based on ports
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      {/* Input Handles */}
-      {inputs &&
-        inputs.map((input, index) => (
-          <Handle
-            key={`in-${index}`}
-            type="target"
-            position="left"
-            id={`in-${input}`}
-            style={{
-              top: computeTopPercentage(index, inputs.length),
-              background: '#555',
-            }}
-          />
-        ))}
-
-      {/* Node Label */}
+    <>
+      <NodeResizer
+        color="#ff0071"
+        isVisible={selected}
+        minWidth={100}
+        minHeight={30}
+      />
       <div
         style={{
-          textAlign: 'center',
-          pointerEvents: 'none', // Allows clicking through the label if necessary
-          zIndex: 1, // Ensure label is above handles
+          padding: 10,
+          border: '1px solid #ddd',
+          borderRadius: 5,
+          background: '#fff',
+          position: 'relative',
+          width: '100%', // Make it responsive to parent size
+          height: '100%', // Make it responsive to parent size
+          boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
       >
-        {label}
-      </div>
+        {/* Input Handles */}
+        {inputs &&
+          inputs.map((input, index) => (
+            <Handle
+              key={`in-${index}`}
+              type="target"
+              position={Position.Left}
+              id={`in-${input}`}
+              style={{
+                top: computeTopPercentage(index, inputs.length),
+                background: '#555',
+              }}
+            />
+          ))}
 
-      {/* Output Handles */}
-      {outputs &&
-        outputs.map((output, index) => (
-          <Handle
-            key={`out-${index}`}
-            type="source"
-            position="right"
-            id={`out-${output}`}
-            style={{
-              top: computeTopPercentage(index, outputs.length),
-              background: '#555',
-            }}
-          />
-        ))}
-    </div>
+        {/* Node Label */}
+        <div
+          style={{
+            textAlign: 'center',
+            pointerEvents: 'none', // Allows clicking through the label if necessary
+            zIndex: 1, // Ensure label is above handles
+            flexGrow: 1,
+          }}
+        >
+          {label}
+        </div>
+
+        {/* Output Handles */}
+        {outputs &&
+          outputs.map((output, index) => (
+            <Handle
+              key={`out-${index}`}
+              type="source"
+              position={Position.Right}
+              id={`out-${output}`}
+              style={{
+                top: computeTopPercentage(index, outputs.length),
+                background: '#555',
+              }}
+            />
+          ))}
+      </div>
+    </>
   );
-}
+});
+
+// Define the GroupNode component with resizable and bordered functionality
+const GroupNode = memo(({ data, selected }) => {
+  return (
+    <>
+      <NodeResizer
+        color="#00ff7f"
+        isVisible={selected}
+        minWidth={200}
+        minHeight={100}
+      />
+      <div
+        style={{
+          padding: 10,
+          border: '2px dashed #777',
+          borderRadius: 5,
+          background: '#f0f0f0',
+          width: '100%', // Make it responsive to parent size
+          height: '100%', // Make it responsive to parent size
+          boxSizing: 'border-box',
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {/* Optional: Add handles if needed */}
+        {/* <Handle type="target" position={Position.Top} />
+        <Handle type="source" position={Position.Bottom} /> */}
+        {data.label}
+      </div>
+    </>
+  );
+});
 
 // Define nodeTypes outside the App component
-const nodeTypes = { custom: CustomNode };
+const nodeTypes = { custom: CustomNode, group: GroupNode };
 
 // Start with empty initial nodes and edges
 const initialNodes = [];
@@ -116,6 +162,7 @@ const Sidebar = ({ availableNodes }) => {
         padding: '10px',
         borderRight: '1px solid #ddd',
         background: '#f0f0f0',
+        overflowY: 'auto',
       }}
     >
       <div className="description">Drag and drop these nodes to the canvas:</div>
@@ -280,6 +327,9 @@ function App() {
           type: node.type || 'default',
           position: node.position,
           data: node.data,
+          parentId: node.parentId,
+          extent: node.extent,
+          style: node.style,
         })),
         edges: updatedEdges.map((edge) => ({
           id: edge.id,
@@ -363,6 +413,70 @@ function App() {
           sendFlowToServer(updatedNodes, edges);
         }
       }
+      if (event.key === 'g') {
+        const selectedNodes = nodes.filter((node) => node.selected && !node.parentId);
+
+        if (selectedNodes.length > 0) {
+          // Compute bounding box around selected nodes
+          const nodePositions = selectedNodes.map((node) => {
+            const width = node.style?.width || 150; // Width of CustomNode
+            const height =
+              node.style?.height ||
+              (40 + (Math.max(node.data.in.length, node.data.out.length, 1) - 1) * 20); // Height of CustomNode
+            return {
+              x1: node.position.x,
+              y1: node.position.y,
+              x2: node.position.x + width,
+              y2: node.position.y + height,
+            };
+          });
+
+          const minX = Math.min(...nodePositions.map((pos) => pos.x1));
+          const minY = Math.min(...nodePositions.map((pos) => pos.y1));
+          const maxX = Math.max(...nodePositions.map((pos) => pos.x2));
+          const maxY = Math.max(...nodePositions.map((pos) => pos.y2));
+
+          const padding = 40;
+          const parentNodePosition = { x: minX - padding, y: minY - padding };
+          const parentNodeWidth = maxX - minX + 2 * padding;
+          const parentNodeHeight = maxY - minY + 2 * padding;
+
+          // Create parent node
+          const parentId = uuidv4();
+          const parentNode = {
+            id: parentId,
+            type: 'group',
+            position: parentNodePosition,
+            data: { label: 'Group' },
+            style: {
+              width: parentNodeWidth,
+              height: parentNodeHeight,
+              backgroundColor: '#eee',
+            },
+          };
+
+          // Update selected nodes to have parentId and positions relative to parent node
+          const childNodes = selectedNodes.map((node) => ({
+            ...node,
+            position: {
+              x: node.position.x - parentNodePosition.x,
+              y: node.position.y - parentNodePosition.y,
+            },
+            parentId: parentId,
+            extent: 'parent',
+            selected: false,
+          }));
+
+          // Nodes not selected
+          const nonSelectedNodes = nodes.filter((node) => !node.selected || node.parentId);
+
+          // Set nodes: parent node, then child nodes, then non-selected nodes
+          const newNodes = [parentNode, ...childNodes, ...nonSelectedNodes];
+
+          setNodes(newNodes);
+          sendFlowToServer(newNodes, edges);
+        }
+      }
     },
     [nodes, edges, copiedNodes]
   );
@@ -408,9 +522,75 @@ function App() {
           in: nodeData.in,
           out: nodeData.out,
         },
+        style: {
+          width: 150,
+          height:
+            40 + (Math.max(nodeData.in.length, nodeData.out.length, 1) - 1) * 20,
+        },
       };
 
       const updatedNodes = nodes.concat(newNode);
+      setNodes(updatedNodes);
+      sendFlowToServer(updatedNodes, edges);
+    },
+    [nodes, edges]
+  );
+
+  const onNodeDragStop = useCallback(
+    (event, node) => {
+      // Calculate node's center position
+      const nodeWidth = node.style?.width || 150;
+      const nodeHeight = node.style?.height || 40;
+      const nodeCenterX = node.position.x + nodeWidth / 2;
+      const nodeCenterY = node.position.y + nodeHeight / 2;
+
+      // Find parent node if the node is dropped inside a group
+      const parentNode = nodes.find(
+        (n) =>
+          n.id !== node.id &&
+          n.type === 'group' &&
+          n.position.x <= nodeCenterX &&
+          n.position.y <= nodeCenterY &&
+          n.position.x + (n.style?.width || 0) >= nodeCenterX &&
+          n.position.y + (n.style?.height || 0) >= nodeCenterY
+      );
+
+      let updatedNode = { ...node };
+
+      if (parentNode) {
+        updatedNode = {
+          ...updatedNode,
+          parentId: parentNode.id,
+          extent: 'parent',
+          position: {
+            x: node.position.x - parentNode.position.x,
+            y: node.position.y - parentNode.position.y,
+          },
+        };
+      } else if (node.parentId) {
+        const parent = nodes.find((n) => n.id === node.parentId);
+        if (parent) {
+          updatedNode = {
+            ...updatedNode,
+            position: {
+              x: node.position.x + parent.position.x,
+              y: node.position.y + parent.position.y,
+            },
+            parentId: null,
+            extent: undefined,
+          };
+        }
+      }
+
+      // Ensure parent nodes come before child nodes in the nodes array
+      const updatedNodes = nodes
+        .map((n) => (n.id === node.id ? updatedNode : n))
+        .sort((a, b) => {
+          if (a.id === updatedNode.parentId) return -1;
+          if (b.id === updatedNode.parentId) return 1;
+          return 0;
+        });
+
       setNodes(updatedNodes);
       sendFlowToServer(updatedNodes, edges);
     },
@@ -515,6 +695,7 @@ function App() {
             onNodeDoubleClick={onNodeDoubleClick}
             onDrop={onDrop}
             onDragOver={onDragOver}
+            onNodeDragStop={onNodeDragStop}
             fitView
           >
             <Background />
