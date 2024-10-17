@@ -11,26 +11,17 @@ import {
   applyNodeChanges,
   applyEdgeChanges,
   NodeResizer,
-} from '@xyflow/react';
+} from '@xyflow/react'; // Ensure this is the correct package
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import { FaBars, FaPlay, FaSearch } from 'react-icons/fa';
+import { debounce } from 'lodash'; // Import debounce
 
 import '@xyflow/react/dist/style.css';
 
 // Define the CustomNode component with resizable and bordered functionality
 const CustomNode = memo(({ data, selected }) => {
   const { label, in: inputs, out: outputs } = data;
-
-  // Configuration for port spacing
-  const portSpacing = 20; // Pixels between ports
-  const baseHeight = 40; // Base height of the node
-
-  // Determine the maximum number of ports on either side
-  const maxPorts = Math.max(inputs.length, outputs.length, 1); // Ensure at least 1
-
-  // Calculate the node's height dynamically
-  const nodeHeight = baseHeight + (maxPorts - 1) * portSpacing;
 
   // Function to calculate the top position in percentage based on index and total ports
   const computeTopPercentage = (index, total) => {
@@ -53,8 +44,8 @@ const CustomNode = memo(({ data, selected }) => {
           borderRadius: 5,
           background: '#fff',
           position: 'relative',
-          width: '100%', // Make it responsive to parent size
-          height: '100%', // Make it responsive to parent size
+          width: '100%', // Responsive to parent size
+          height: '100%', // Responsive to parent size
           boxSizing: 'border-box',
           display: 'flex',
           alignItems: 'center',
@@ -123,8 +114,8 @@ const GroupNode = memo(({ data, selected }) => {
           border: '2px dashed #777',
           borderRadius: 5,
           background: '#f0f0f0',
-          width: '100%', // Make it responsive to parent size
-          height: '100%', // Make it responsive to parent size
+          width: '100%', // Responsive to parent size
+          height: '100%', // Responsive to parent size
           boxSizing: 'border-box',
           position: 'relative',
           display: 'flex',
@@ -132,9 +123,6 @@ const GroupNode = memo(({ data, selected }) => {
           justifyContent: 'center',
         }}
       >
-        {/* Optional: Add handles if needed */}
-        {/* <Handle type="target" position={Position.Top} />
-        <Handle type="source" position={Position.Bottom} /> */}
         {data.label}
       </div>
     </>
@@ -192,8 +180,8 @@ const Sidebar = ({ availableNodes }) => {
 };
 
 function App() {
-  const [nodes, setNodes] = useNodesState(initialNodes);
-  const [edges, setEdges] = useEdgesState(initialEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [response, setResponse] = useState(null);
   const socketRef = useRef(null); // Use useRef to hold the WebSocket
   const [copiedNodes, setCopiedNodes] = useState([]);
@@ -259,9 +247,11 @@ function App() {
 
         if (message.type === 'client_id') {
           setClientId(message.client_id);
+          console.log(`Assigned Client ID: ${message.client_id}`);
         } else if (message.type === 'client_list') {
           const uniqueClients = Array.from(new Set(message.clients));
           setConnectedClients(uniqueClients);
+          console.log('Updated Client List:', uniqueClients);
 
           // Assign colors to new clients
           uniqueClients.forEach((id) => {
@@ -272,6 +262,7 @@ function App() {
           });
         } else if (message.type === 'flow_update') {
           const updatedFlow = message.data;
+          console.log('Received flow_update:', updatedFlow);
           if (updatedFlow.nodes && updatedFlow.edges) {
             setNodes((prevNodes) => {
               const nodesMap = new Map(prevNodes.map((node) => [node.id, node]));
@@ -283,9 +274,15 @@ function App() {
                     ...nodesMap.get(node.id)?.data,
                     ...node.data,
                   },
+                  style: {
+                    ...nodesMap.get(node.id)?.style,
+                    ...node.style,
+                  },
                 });
               });
-              return Array.from(nodesMap.values());
+              const updatedNodesArray = Array.from(nodesMap.values());
+              console.log('Updated Nodes after flow_update:', updatedNodesArray);
+              return updatedNodesArray;
             });
 
             setEdges((prevEdges) => {
@@ -296,7 +293,9 @@ function App() {
                   ...edge,
                 });
               });
-              return Array.from(edgesMap.values());
+              const updatedEdgesArray = Array.from(edgesMap.values());
+              console.log('Updated Edges after flow_update:', updatedEdgesArray);
+              return updatedEdgesArray;
             });
           }
         }
@@ -312,47 +311,62 @@ function App() {
     };
   }, []);
 
-  const sendFlowToServer = (updatedNodes, updatedEdges) => {
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket is not open. Cannot send flow data to server.');
-      return;
-    }
+  // Function to send flow data to the server via WebSocket
+  const sendFlowToServer = useCallback(
+    (updatedNodes, updatedEdges) => {
+      if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+        console.warn('WebSocket is not open. Cannot send flow data to server.');
+        return;
+      }
 
-    const flowData = {
-      type: 'flow_update',
-      data: {
-        nodes: updatedNodes.map((node) => ({
-          id: node.id,
-          label: node.data.label,
-          type: node.type || 'default',
-          position: node.position,
-          data: node.data,
-          parentId: node.parentId,
-          extent: node.extent,
-          style: node.style,
-        })),
-        edges: updatedEdges.map((edge) => ({
-          id: edge.id,
-          source: edge.source,
-          target: edge.target,
-          sourceHandle: edge.sourceHandle,
-          targetHandle: edge.targetHandle,
-        })),
-      },
-    };
+      const flowData = {
+        type: 'flow_update',
+        data: {
+          nodes: updatedNodes.map((node) => ({
+            id: node.id,
+            label: node.data.label,
+            type: node.type || 'default',
+            position: node.position,
+            data: node.data,
+            parentId: node.parentId,
+            extent: node.extent,
+            style: node.style, // Ensure style is included
+          })),
+          edges: updatedEdges.map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            sourceHandle: edge.sourceHandle,
+            targetHandle: edge.targetHandle,
+          })),
+        },
+      };
 
-    socketRef.current.send(JSON.stringify(flowData));
-  };
+      console.log('Sending flow_update:', flowData);
+      socketRef.current.send(JSON.stringify(flowData));
+    },
+    []
+  );
 
+  // Debounced version of sendFlowToServer to prevent flooding
+  const debouncedSendFlowToServer = useRef(
+    debounce((updatedNodes, updatedEdges) => {
+      sendFlowToServer(updatedNodes, updatedEdges);
+    }, 300) // Adjust the delay as needed
+  ).current;
+
+  // Handle connections (creating edges)
   const onConnect = useCallback(
     (params) => {
       const updatedEdges = addEdge(params, edges);
+      console.log('Edge connected:', params);
       setEdges(updatedEdges);
-      sendFlowToServer(nodes, updatedEdges);
+      debouncedSendFlowToServer(nodes, updatedEdges);
     },
-    [nodes, edges]
+    [nodes, edges, debouncedSendFlowToServer]
   );
 
+  // Handle node double-click (renaming)
   const onNodeDoubleClick = useCallback(
     (event, node) => {
       const newLabel = prompt('Enter new label:', node.data.label);
@@ -360,20 +374,23 @@ function App() {
         const updatedNodes = nodes.map((n) =>
           n.id === node.id ? { ...n, data: { ...n.data, label: newLabel } } : n
         );
+        console.log(`Node ${node.id} label changed to: ${newLabel}`);
         setNodes(updatedNodes);
-        sendFlowToServer(updatedNodes, edges);
+        debouncedSendFlowToServer(updatedNodes, edges);
       }
     },
-    [nodes, edges]
+    [nodes, edges, debouncedSendFlowToServer]
   );
 
-  const sendDataToBackend = () => {
+  // Function to send flow data to the backend via HTTP POST
+  const sendDataToBackend = useCallback(() => {
     const flowData = {
       nodes: nodes.map((node) => ({
         id: node.id,
         label: node.data.label,
         type: node.type || 'default',
         data: node.data,
+        style: node.style,
       })),
       edges: edges.map((edge) => ({
         source: edge.source,
@@ -383,22 +400,26 @@ function App() {
       })),
     };
 
+    console.log('Sending data to backend:', flowData);
+
     axios
       .post('http://127.0.0.1:8000/api/operation', flowData)
       .then((res) => {
-        console.log('Response:', res.data);
+        console.log('Response from backend:', res.data);
         setResponse(res.data.result);
       })
       .catch((error) => {
-        console.error('Error:', error);
+        console.error('Error sending data to backend:', error);
       });
-  };
+  }, [nodes, edges]);
 
+  // Handle keyboard shortcuts for copy, paste, and grouping
   const handleKeyDown = useCallback(
     (event) => {
       if (event.ctrlKey && event.key === 'c') {
         const selectedNodes = nodes.filter((node) => node.selected);
         setCopiedNodes(selectedNodes);
+        console.log('Copied nodes:', selectedNodes);
       }
       if (event.ctrlKey && event.key === 'v') {
         if (copiedNodes.length > 0) {
@@ -409,8 +430,9 @@ function App() {
             selected: false,
           }));
           const updatedNodes = nodes.concat(newNodes);
+          console.log('Pasted nodes:', newNodes);
           setNodes(updatedNodes);
-          sendFlowToServer(updatedNodes, edges);
+          debouncedSendFlowToServer(updatedNodes, edges);
         }
       }
       if (event.key === 'g') {
@@ -472,15 +494,17 @@ function App() {
 
           // Set nodes: parent node, then child nodes, then non-selected nodes
           const newNodes = [parentNode, ...childNodes, ...nonSelectedNodes];
+          console.log('Grouped nodes into:', parentNode, childNodes);
 
           setNodes(newNodes);
-          sendFlowToServer(newNodes, edges);
+          debouncedSendFlowToServer(newNodes, edges);
         }
       }
     },
-    [nodes, edges, copiedNodes]
+    [nodes, edges, copiedNodes, debouncedSendFlowToServer]
   );
 
+  // Add keyboard event listener
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => {
@@ -488,11 +512,13 @@ function App() {
     };
   }, [handleKeyDown]);
 
+  // Handle drag over event
   const onDragOver = useCallback((event) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   }, []);
 
+  // Handle drop event
   const onDrop = useCallback(
     (event) => {
       event.preventDefault();
@@ -505,6 +531,7 @@ function App() {
       }
 
       const nodeData = JSON.parse(nodeDataString);
+      console.log('Dropped node data:', nodeData);
 
       const position = {
         x: event.clientX - reactFlowBounds.left,
@@ -530,14 +557,18 @@ function App() {
       };
 
       const updatedNodes = nodes.concat(newNode);
+      console.log('New node added:', newNode);
       setNodes(updatedNodes);
-      sendFlowToServer(updatedNodes, edges);
+      debouncedSendFlowToServer(updatedNodes, edges);
     },
-    [nodes, edges]
+    [nodes, edges, debouncedSendFlowToServer]
   );
 
+  // Handle node drag stop (to detect resizing and group placement)
   const onNodeDragStop = useCallback(
     (event, node) => {
+      console.log(`Node drag stopped for node: ${node.id}`);
+
       // Calculate node's center position
       const nodeWidth = node.style?.width || 150;
       const nodeHeight = node.style?.height || 40;
@@ -567,6 +598,7 @@ function App() {
             y: node.position.y - parentNode.position.y,
           },
         };
+        console.log(`Node ${node.id} assigned to parent group ${parentNode.id}`);
       } else if (node.parentId) {
         const parent = nodes.find((n) => n.id === node.parentId);
         if (parent) {
@@ -579,11 +611,12 @@ function App() {
             parentId: null,
             extent: undefined,
           };
+          console.log(`Node ${node.id} removed from parent group ${parent.id}`);
         }
       }
 
       // Ensure parent nodes come before child nodes in the nodes array
-      const updatedNodes = nodes
+      const updatedNodesArray = nodes
         .map((n) => (n.id === node.id ? updatedNode : n))
         .sort((a, b) => {
           if (a.id === updatedNode.parentId) return -1;
@@ -591,10 +624,46 @@ function App() {
           return 0;
         });
 
-      setNodes(updatedNodes);
-      sendFlowToServer(updatedNodes, edges);
+      setNodes(updatedNodesArray);
+      debouncedSendFlowToServer(updatedNodesArray, edges);
     },
-    [nodes, edges]
+    [nodes, edges, debouncedSendFlowToServer]
+  );
+
+  // Define the onNodesChangeHandler using useCallback
+  const onNodesChangeHandler = useCallback(
+    (changes) => {
+      console.log('onNodesChange called with changes:', changes);
+
+      // Apply node changes using applyNodeChanges
+      let updatedNodes = applyNodeChanges(changes, nodes);
+
+      // Iterate through changes to handle 'dimensions' type
+      changes.forEach((change) => {
+        if (change.type === 'dimensions') {
+          updatedNodes = updatedNodes.map((node) => {
+            if (node.id === change.id && change.dimensions) {
+              return {
+                ...node,
+                style: {
+                  ...node.style,
+                  width: change.dimensions.width,
+                  height: change.dimensions.height,
+                },
+              };
+            }
+            return node;
+          });
+        }
+      });
+
+      // Update the state with the modified nodes
+      setNodes(updatedNodes);
+
+      // Send the updated flow to the server using debounced function
+      debouncedSendFlowToServer(updatedNodes, edges);
+    },
+    [nodes, edges, debouncedSendFlowToServer]
   );
 
   return (
@@ -681,15 +750,12 @@ function App() {
             nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
-            onNodesChange={(changes) => {
-              const updatedNodes = applyNodeChanges(changes, nodes);
-              setNodes(updatedNodes);
-              sendFlowToServer(updatedNodes, edges);
-            }}
+            onNodesChange={onNodesChangeHandler} // Updated handler
             onEdgesChange={(changes) => {
+              console.log('onEdgesChange called with changes:', changes);
               const updatedEdges = applyEdgeChanges(changes, edges);
               setEdges(updatedEdges);
-              sendFlowToServer(nodes, updatedEdges);
+              debouncedSendFlowToServer(nodes, updatedEdges);
             }}
             onConnect={onConnect}
             onNodeDoubleClick={onNodeDoubleClick}
