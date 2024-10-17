@@ -20,6 +20,22 @@ import '@xyflow/react/dist/style.css';
 function CustomNode({ data }) {
   const { label, in: inputs, out: outputs } = data;
 
+  // Configuration for port spacing
+  const portSpacing = 20; // Pixels between ports
+  const baseHeight = 40; // Base height of the node
+
+  // Determine the maximum number of ports on either side
+  const maxPorts = Math.max(inputs.length, outputs.length, 1); // Ensure at least 1
+
+  // Calculate the node's height dynamically
+  const nodeHeight = baseHeight + (maxPorts - 1) * portSpacing;
+
+  // Function to calculate the top position in percentage based on index and total ports
+  const computeTopPercentage = (index, total) => {
+    if (total === 1) return '50%';
+    return `${((index + 1) / (total + 1)) * 100}%`;
+  };
+
   return (
     <div
       style={{
@@ -28,8 +44,14 @@ function CustomNode({ data }) {
         borderRadius: 5,
         background: '#fff',
         position: 'relative',
+        width: '150px', // Optional: Set a fixed width for consistency
+        height: `${nodeHeight}px`, // Dynamic height based on ports
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
       }}
     >
+      {/* Input Handles */}
       {inputs &&
         inputs.map((input, index) => (
           <Handle
@@ -37,10 +59,25 @@ function CustomNode({ data }) {
             type="target"
             position="left"
             id={`in-${input}`}
-            style={{ top: 10 + index * 20 }}
+            style={{
+              top: computeTopPercentage(index, inputs.length),
+              background: '#555',
+            }}
           />
         ))}
-      <div>{label}</div>
+
+      {/* Node Label */}
+      <div
+        style={{
+          textAlign: 'center',
+          pointerEvents: 'none', // Allows clicking through the label if necessary
+          zIndex: 1, // Ensure label is above handles
+        }}
+      >
+        {label}
+      </div>
+
+      {/* Output Handles */}
       {outputs &&
         outputs.map((output, index) => (
           <Handle
@@ -48,7 +85,10 @@ function CustomNode({ data }) {
             type="source"
             position="right"
             id={`out-${output}`}
-            style={{ top: 10 + index * 20 }}
+            style={{
+              top: computeTopPercentage(index, outputs.length),
+              background: '#555',
+            }}
           />
         ))}
     </div>
@@ -417,6 +457,7 @@ function App() {
           <FaPlay />
         </button>
         <button
+          onClick={() => window.open('http://127.0.0.1:5000', '_blank')}
           style={{
             background: 'none',
             border: 'none',

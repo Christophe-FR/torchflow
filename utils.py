@@ -2,7 +2,7 @@ import ast
 import os
 
 
-def get_registered_node():
+def get_registered_node(ignore_t=True):
     nodes_folder = './nodes'
     registered_nodes = []
 
@@ -29,23 +29,48 @@ def get_registered_node():
                             # Extract constructor parameters (excluding 'self')
                             for n in node.body:
                                 if isinstance(n, ast.FunctionDef) and n.name == '__init__':
-                                    class_info['params'] = [arg.arg for arg in n.args.args if arg.arg != 'self']
+                                    params = [
+                                        arg.arg for arg in n.args.args 
+                                        if arg.arg != 'self'
+                                    ]
+                                    if ignore_t:
+                                        params = [param for param in params if param != 't']
+                                    class_info['params'] = params
 
                             # Extract forward method arguments and returned values
                             for n in node.body:
                                 if isinstance(n, ast.FunctionDef) and n.name == 'forward':
-                                    class_info['in'] = [arg.arg for arg in n.args.args if arg.arg != 'self']
+                                    inputs = [
+                                        arg.arg for arg in n.args.args 
+                                        if arg.arg != 'self'
+                                    ]
+                                    if ignore_t:
+                                        inputs = [inp for inp in inputs if inp != 't']
+                                    class_info['in'] = inputs
+                                    
                                     for stmt in ast.walk(n):
                                         if isinstance(stmt, ast.Return):
                                             if isinstance(stmt.value, ast.Tuple):
-                                                class_info['out'] = [elt.id for elt in stmt.value.elts if isinstance(elt, ast.Name)]
+                                                outs = [
+                                                    elt.id for elt in stmt.value.elts 
+                                                    if isinstance(elt, ast.Name)
+                                                ]
                                             elif isinstance(stmt.value, ast.Name):
-                                                class_info['out'] = [stmt.value.id]
+                                                outs = [stmt.value.id]
+                                            else:
+                                                outs = []
+                                            
+                                            if ignore_t:
+                                                outs = [out for out in outs if out != 't']
+                                            class_info['out'] = outs
 
                             registered_nodes.append(class_info)
 
     return registered_nodes
 
 
-if __name__=='__main__':
-    print(get_registered_node())
+if __name__ == '__main__':
+    # Example usage:
+    # Set ignore_t to True to exclude all 't' from params, in, and out
+    nodes = get_registered_node(ignore_t=True)
+    print(nodes)
